@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Datelike, Local};
 use typst::diag::{FileError, FileResult, StrResult};
@@ -9,6 +9,7 @@ use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryBuilder, World};
+use typst_kit::fonts::Fonts;
 use typst_kit::{
     fonts::{FontSearcher, FontSlot},
     package::PackageStorage,
@@ -16,10 +17,11 @@ use typst_kit::{
 
 use std::collections::HashMap;
 
-use crate::{download::SlientDownload, Input};
+use crate::{Input, download::SlientDownload};
 
 /// A world that provides access to the operating system.
 pub struct SystemWorld {
+    fonts: Arc<Fonts>,
     /// The working directory.
     workdir: Option<PathBuf>,
     /// The root relative to which absolute paths are resolved.
@@ -30,8 +32,8 @@ pub struct SystemWorld {
     library: LazyHash<Library>,
     /// Metadata about discovered fonts.
     book: LazyHash<FontBook>,
-    /// Locations of and storage for lazily loaded fonts.
-    fonts: Vec<FontSlot>,
+    // /// Locations of and storage for lazily loaded fonts.
+    // fonts: Vec<FontSlot>,
     /// Maps file ids to source files and buffers.
     slots: Mutex<HashMap<FileId, FileSlot>>,
     /// Holds information about where packages are stored.
@@ -63,7 +65,7 @@ impl World for SystemWorld {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        self.fonts[index].get()
+        self.fonts.fonts[index].get()
     }
 
     fn today(&self, offset: Option<i64>) -> Option<Datetime> {
@@ -83,8 +85,8 @@ impl World for SystemWorld {
 }
 
 impl SystemWorld {
-    pub fn builder(root: PathBuf, input: Input) -> SystemWorldBuilder {
-        SystemWorldBuilder::new(root, input)
+    pub fn builder(fonts: Arc<Fonts>, inputs: Dict) -> SystemWorldBuilder {
+        SystemWorldBuilder::new(fonts, inputs)
     }
 
     /// Access the canonical slot for the given file id.
@@ -115,87 +117,63 @@ impl SystemWorld {
 }
 
 pub struct SystemWorldBuilder {
-    root: PathBuf,
-    input: Input,
-    font_paths: Vec<PathBuf>,
-    ignore_system_fonts: bool,
     inputs: Dict,
+    fonts: Arc<Fonts>,
 }
 
 impl SystemWorldBuilder {
-    pub fn new(root: PathBuf, input: Input) -> Self {
-        Self {
-            root,
-            input,
-            font_paths: Vec::new(),
-            ignore_system_fonts: false,
-            inputs: Dict::default(),
-        }
-    }
-
-    pub fn font_paths(mut self, font_paths: Vec<PathBuf>) -> Self {
-        self.font_paths = font_paths;
-        self
-    }
-
-    pub fn ignore_system_fonts(mut self, ignore: bool) -> Self {
-        self.ignore_system_fonts = ignore;
-        self
-    }
-
-    pub fn inputs(mut self, inputs: Dict) -> Self {
-        self.inputs = inputs;
-        self
-    }
-
-    pub fn build(self) -> StrResult<SystemWorld> {
-        let fonts = FontSearcher::new()
-            .include_system_fonts(!self.ignore_system_fonts)
-            .search_with(&self.font_paths);
-
+    pub fn build_world(&self, input: Input) -> StrResult<SystemWorld> {
         let mut slots = HashMap::new();
-        let main = match self.input {
+        let (main, root) = match input {
             Input::Path(path) => {
                 // Resolve the virtual path of the main file within the project root.
                 let path = path
                     .canonicalize()
                     .map_err(|err| format!("Failed to canonicalize path: {}", err))?;
-                FileId::new(
+                let file_id = FileId::new(
                     None,
-                    VirtualPath::within_root(&path, &self.root)
+                    VirtualPath::within_root(&path, &path)
                         .ok_or("input file must be contained in project root")?,
-                )
+                );
+                (file_id, path)
             }
-            Input::Bytes(bytes) => {
+            Input::Bytes { data, root } => {
                 // Fake file ID
                 let file_id = FileId::new_fake(VirtualPath::new("<bytes>"));
                 let mut file_slot = FileSlot::new(file_id);
                 file_slot
                     .source
-                    .init(Source::new(file_id, decode_utf8(&bytes)?.to_string()));
-                file_slot.file.init(Bytes::new(bytes));
+                    .init(Source::new(file_id, decode_utf8(&data)?.to_string()));
+                file_slot.file.init(Bytes::new(data));
                 slots.insert(file_id, file_slot);
-                file_id
+                (file_id, root)
             }
         };
 
         let world = SystemWorld {
             workdir: std::env::current_dir().ok(),
-            root: self.root,
+            root,
             main,
             library: LazyHash::new(
                 LibraryBuilder::default()
                     .with_features(vec![typst::Feature::Html].into_iter().collect())
-                    .with_inputs(self.inputs)
+                    .with_inputs(self.inputs.clone())
                     .build(),
             ),
-            book: LazyHash::new(fonts.book),
-            fonts: fonts.fonts,
+            book: LazyHash::new(self.fonts.book.clone()),
+            fonts: self.fonts.clone(),
             slots: Mutex::new(slots),
             package_storage: PackageStorage::new(None, None, crate::download::downloader()),
             now: OnceLock::new(),
         };
         Ok(world)
+    }
+
+    pub fn new(fonts: Arc<Fonts>, inputs: Dict) -> Self {
+        Self {
+            inputs,
+            fonts,
+        }
     }
 }
 

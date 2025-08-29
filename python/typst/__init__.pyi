@@ -40,26 +40,38 @@ class TypstWarning(UserWarning):
 
     def __init__(self, message: str, hints: Optional[List[str]] = None, trace: Optional[List[str]] = None) -> None: ...
 
-
-class Compiler:
+class CompilerBuilder:
     def __init__(
         self,
-        input: Input,
-        root: Optional[Input] = None,
         font_paths: List[Input] = [],
         ignore_system_fonts: bool = False,
         sys_inputs: Dict[str, str] = {},
-        pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
     ) -> None:
-        """Initialize a Typst compiler.
+        """Initialize a Typst compiler builder.
         Args:
-            input: .typ file bytes or path to project's main .typ file.
-            root (Optional[PathLike], optional): Root path for the Typst project.
             font_paths (List[PathLike]): Folders with fonts.
             ignore_system_fonts (bool): Ignore system fonts.
             sys_inputs (Dict[str, str]): string key-value pairs to be passed to the document via sys.inputs
         """
+    
+    def build_path(self, path: Input) -> "Compiler":
+        """Build a Typst compiler.
+        Args:
+            input: .typ file bytes or path to project's main .typ file.
+        Returns:
+            Compiler: A Typst compiler.
+        """
 
+    def build_bytes(self, data: bytes, root: Input = None) -> "Compiler":
+        """Build a Typst compiler.
+        Args:
+            data: .typ file bytes.
+            root: Root path for the Typst project.
+        Returns:
+            Compiler: A Typst compiler.
+        """
+
+class Compiler:
     def compile(
         self,
         output: Optional[Input] = None,
@@ -112,131 +124,3 @@ class Compiler:
         Returns:
             str: Return the query result.
         """
-
-@overload
-def compile(
-    input: Input,
-    output: Input,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> None: ...
-@overload
-def compile(
-    input: Input,
-    output: None = None,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> bytes: ...
-def compile(
-    input: Input,
-    output: Optional[Input] = None,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> Optional[Union[bytes, List[bytes]]]:
-    """Compile a Typst project.
-    Args:
-        input: .typ file bytes or path to project's main .typ file.
-        output (Optional[PathLike], optional): Path to save the compiled file.
-        Allowed extensions are `.pdf`, `.svg` and `.png`
-        root (Optional[PathLike], optional): Root path for the Typst project.
-        font_paths (List[PathLike]): Folders with fonts.
-        ignore_system_fonts (bool): Ignore system fonts
-        format (Optional[str]): Output format.
-        Allowed values are `pdf`, `svg` and `png`.
-        ppi (Optional[float]): Pixels per inch for PNG output, defaults to 144.
-        sys_inputs (Dict[str, str]): string key-value pairs to be passed to the document via sys.inputs
-    Returns:
-        Optional[Union[bytes, List[bytes]]]: Return the compiled file as `bytes` if output is `None`.
-    """
-
-@overload
-def compile_with_warnings(
-    input: Input,
-    output: Input,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> Tuple[None, List[TypstWarning]]: ...
-@overload
-def compile_with_warnings(
-    input: Input,
-    output: None = None,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> Tuple[bytes, List[TypstWarning]]: ...
-def compile_with_warnings(
-    input: Input,
-    output: Optional[Input] = None,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    format: Optional[OutputFormat] = None,
-    ppi: Optional[float] = None,
-    sys_inputs: Dict[str, str] = {},
-    pdf_standards: Optional[Union[Literal["1.7", "a-2b", "a-3b"], List[Literal["1.7", "a-2b", "a-3b"]]]] = []
-) -> Tuple[Optional[Union[bytes, List[bytes]]], List[TypstWarning]]:
-    """Compile a Typst project and return warnings.
-    Args:
-        input: .typ file bytes or path to project's main .typ file.
-        output (Optional[PathLike], optional): Path to save the compiled file.
-        Allowed extensions are `.pdf`, `.svg` and `.png`
-        root (Optional[PathLike], optional): Root path for the Typst project.
-        font_paths (List[PathLike]): Folders with fonts.
-        ignore_system_fonts (bool): Ignore system fonts
-        format (Optional[str]): Output format.
-        Allowed values are `pdf`, `svg` and `png`.
-        ppi (Optional[float]): Pixels per inch for PNG output, defaults to 144.
-        sys_inputs (Dict[str, str]): string key-value pairs to be passed to the document via sys.inputs
-    Returns:
-        Optional[Union[bytes, List[bytes]]]: Return the compiled file as `bytes` if output is `None`.
-    """
-
-def query(
-    input: Input,
-    selector: str,
-    field: Optional[str] = None,
-    one: bool = False,
-    format: Optional[Literal["json", "yaml"]] = None,
-    root: Optional[Input] = None,
-    font_paths: List[Input] = [],
-    ignore_system_fonts: bool = False,
-    sys_inputs: Dict[str, str] = {},
-) -> str:
-    """Query a Typst document.
-    Args:
-        input: .typ file bytes or path to project's main .typ file.
-        selector (str): Typst selector like `<label>`.
-        field (Optional[str], optional): Field to query.
-        one (bool, optional): Query only one element.
-        format (Optional[str]): Output format, `json` or `yaml`.
-        root (Optional[PathLike], optional): Root path for the Typst project.
-        font_paths (List[PathLike]): Folders with fonts.
-        ignore_system_fonts (bool): Ignore system fonts
-        sys_inputs (Dict[str, str]): string key-value pairs to be passed to the document via sys.inputs
-    Returns:
-        str: Return the query result.
-    """

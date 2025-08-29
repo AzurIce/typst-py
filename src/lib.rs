@@ -1,15 +1,19 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyString, PyTuple};
 
-use query::{query as typst_query, QueryCommand, SerializationFormat};
+use query::{QueryCommand, SerializationFormat, query as typst_query};
 use std::collections::HashMap;
 use typst::diag::SourceDiagnostic;
 use typst::foundations::{Dict, Value};
+use typst_kit::fonts::FontSearcher;
 use world::SystemWorld;
+
+use crate::world::SystemWorldBuilder;
 
 mod compiler;
 mod download;
@@ -163,10 +167,68 @@ fn create_typst_warning_details_from_diagnostics(
         .collect()
 }
 
-#[derive(FromPyObject)]
 pub enum Input {
     Path(PathBuf),
-    Bytes(Vec<u8>),
+    Bytes { data: Vec<u8>, root: PathBuf },
+}
+
+/// A typst compiler builder
+#[pyclass(module = "typst._typst")]
+pub struct CompilerBuilder {
+    builder: SystemWorldBuilder,
+}
+
+#[pymethods]
+impl CompilerBuilder {
+    /// Create a new typst compiler instance
+    #[new]
+    #[pyo3(signature = (
+        font_paths = Vec::new(),
+        ignore_system_fonts = false,
+        sys_inputs = HashMap::new()
+    ))]
+    fn new(
+        font_paths: Vec<PathBuf>,
+        ignore_system_fonts: bool,
+        sys_inputs: HashMap<String, String>,
+    ) -> PyResult<Self> {
+        let fonts = FontSearcher::new()
+            .include_system_fonts(!ignore_system_fonts)
+            .search_with(&font_paths);
+        let fonts = Arc::new(fonts);
+        // Create the world that serves sources, fonts and files.
+        let builder = SystemWorld::builder(
+            fonts,
+            Dict::from_iter(
+                sys_inputs
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), Value::Str(v.into()))),
+            ),
+        );
+        Ok(Self { builder })
+    }
+    fn build_path(&self, path: PathBuf) -> PyResult<Compiler> {
+        let input = Input::Path(path);
+        self.py_build(input)
+    }
+    #[pyo3(signature = (data, root = None))]
+    fn build_bytes(&self, data: Vec<u8>, root: Option<PathBuf>) -> PyResult<Compiler> {
+        let input = Input::Bytes {
+            data,
+            root: root.unwrap_or_default(),
+        };
+        self.py_build(input)
+    }
+}
+
+impl CompilerBuilder {
+    fn py_build(&self, input: Input) -> PyResult<Compiler> {
+        let world = self
+            .builder
+            .build_world(input)
+            .map_err(|msg| PyRuntimeError::new_err(msg.to_string()))?;
+        Ok(Compiler { world })
+    }
 }
 
 /// A typst compiler
@@ -246,47 +308,6 @@ impl Compiler {
 
 #[pymethods]
 impl Compiler {
-    /// Create a new typst compiler instance
-    #[new]
-    #[pyo3(signature = (
-        input,
-        root = None,
-        font_paths = Vec::new(),
-        ignore_system_fonts = false,
-        sys_inputs = HashMap::new()
-    ))]
-    fn new(
-        input: Input,
-        root: Option<PathBuf>,
-        font_paths: Vec<PathBuf>,
-        ignore_system_fonts: bool,
-        sys_inputs: HashMap<String, String>,
-    ) -> PyResult<Self> {
-        let root = if let Some(root) = root {
-            root.canonicalize()?
-        } else if let Input::Path(path) = &input {
-            path.canonicalize()?
-                .parent()
-                .map(Into::into)
-                .unwrap_or_else(|| PathBuf::new())
-        } else {
-            PathBuf::new()
-        };
-
-        // Create the world that serves sources, fonts and files.
-        let world = SystemWorld::builder(root, input)
-            .inputs(Dict::from_iter(
-                sys_inputs
-                    .into_iter()
-                    .map(|(k, v)| (k.into(), Value::Str(v.into()))),
-            ))
-            .font_paths(font_paths)
-            .ignore_system_fonts(ignore_system_fonts)
-            .build()
-            .map_err(|msg| PyRuntimeError::new_err(msg.to_string()))?;
-        Ok(Self { world })
-    }
-
     /// Compile a typst file to PDF
     #[pyo3(name = "compile", signature = (output = None, format = None, ppi = None, pdf_standards = Vec::new()))]
     fn py_compile(
@@ -431,107 +452,14 @@ impl Compiler {
     }
 }
 
-/// Compile a typst document
-#[pyfunction]
-#[pyo3(signature = (
-    input,
-    output = None,
-    root = None,
-    font_paths = Vec::new(),
-    ignore_system_fonts = false,
-    format = None, ppi = None,
-    sys_inputs = HashMap::new(),
-    pdf_standards = Vec::new()
-))]
-#[allow(clippy::too_many_arguments)]
-fn compile(
-    py: Python<'_>,
-    input: Input,
-    output: Option<PathBuf>,
-    root: Option<PathBuf>,
-    font_paths: Vec<PathBuf>,
-    ignore_system_fonts: bool,
-    format: Option<&str>,
-    ppi: Option<f32>,
-    sys_inputs: HashMap<String, String>,
-    #[pyo3(from_py_with = extract_pdf_standards)] pdf_standards: Vec<typst_pdf::PdfStandard>,
-) -> PyResult<PyObject> {
-    let mut compiler = Compiler::new(input, root, font_paths, ignore_system_fonts, sys_inputs)?;
-    compiler.py_compile(py, output, format, ppi, pdf_standards)
-}
-
-/// Compile a typst file and return both result and warnings
-#[pyfunction]
-#[pyo3(signature = (
-    input,
-    output = None,
-    root = None,
-    font_paths = Vec::new(),
-    ignore_system_fonts = false,
-    format = None, ppi = None,
-    sys_inputs = HashMap::new(),
-    pdf_standards = Vec::new()
-))]
-#[allow(clippy::too_many_arguments)]
-fn compile_with_warnings(
-    py: Python<'_>,
-    input: Input,
-    output: Option<PathBuf>,
-    root: Option<PathBuf>,
-    font_paths: Vec<PathBuf>,
-    ignore_system_fonts: bool,
-    format: Option<&str>,
-    ppi: Option<f32>,
-    sys_inputs: HashMap<String, String>,
-    #[pyo3(from_py_with = extract_pdf_standards)] pdf_standards: Vec<typst_pdf::PdfStandard>,
-) -> PyResult<PyObject> {
-    let mut compiler = Compiler::new(input, root, font_paths, ignore_system_fonts, sys_inputs)?;
-    compiler.py_compile_with_warnings(py, output, format, ppi, pdf_standards)
-}
-
-/// Query a typst document
-#[pyfunction]
-#[pyo3(
-    name = "query",
-    signature = (
-        input,
-        selector,
-        field = None,
-        one = false,
-        format = None,
-        root = None,
-        font_paths = Vec::new(),
-        ignore_system_fonts = false,
-        sys_inputs = HashMap::new()
-    )
-)]
-#[allow(clippy::too_many_arguments)]
-fn py_query(
-    py: Python<'_>,
-    input: Input,
-    selector: &str,
-    field: Option<&str>,
-    one: bool,
-    format: Option<&str>,
-    root: Option<PathBuf>,
-    font_paths: Vec<PathBuf>,
-    ignore_system_fonts: bool,
-    sys_inputs: HashMap<String, String>,
-) -> PyResult<PyObject> {
-    let mut compiler = Compiler::new(input, root, font_paths, ignore_system_fonts, sys_inputs)?;
-    compiler.py_query(py, selector, field, one, format)
-}
-
 /// Python binding to typst
 #[pymodule(gil_used = false)]
 fn _typst(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_class::<CompilerBuilder>()?;
     m.add_class::<Compiler>()?;
     m.add("TypstError", py.get_type::<TypstError>())?;
     m.add("TypstWarning", py.get_type::<TypstWarning>())?;
-    m.add_function(wrap_pyfunction!(compile, m)?)?;
-    m.add_function(wrap_pyfunction!(compile_with_warnings, m)?)?;
-    m.add_function(wrap_pyfunction!(py_query, m)?)?;
     Ok(())
 }
 
@@ -551,5 +479,31 @@ fn extract_pdf_standards(obj: &Bound<'_, PyAny>) -> PyResult<Vec<typst_pdf::PdfS
         s.iter().map(|s| extract_pdf_standard(&s)).collect()
     } else {
         extract_pdf_standard(obj).map(|s| vec![s])
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn compile_bytes() {
+        let source = r#"
+        $ A = pi r^2 $
+        $ "area" = pi dot "radius"^2 $
+        $ cal(A) :=
+            { x in RR | x "is natural" } $
+        #let x = 5
+        $ #x < 17 $
+        "#;
+        let compiler = CompilerBuilder::new(Vec::new(), false, HashMap::new()).unwrap();
+        let mut world = compiler.build_bytes(source.as_bytes().to_vec(), None).unwrap();
+        world.compile(Some("svg"), Some(144.0), &[]).unwrap();
+    }
+    #[test]
+    fn compile_path() {
+        let compiler = CompilerBuilder::new(Vec::new(), false, HashMap::new()).unwrap();
+        let mut world = compiler.build_path(PathBuf::from("example/hello.typ")).unwrap();
+        world.compile(Some("svg"), Some(144.0), &[]).unwrap();
     }
 }
